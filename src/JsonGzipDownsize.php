@@ -113,10 +113,10 @@ class JsonGzipDownsize
      *
      * @param mixed $data 要转换的数据
      * @param bool $toArray true表示转为数组，false表示转为对象
-     * @param string $parentKey 父级键名，用于特殊处理嵌套结构
+     * @param string|int $parentKey 父级键名，用于特殊处理嵌套结构
      * @return mixed 转换后的数据
      */
-    private static function convertStructure(mixed $data, bool $toArray = true, string $parentKey = ''): mixed
+    private static function convertStructure(mixed $data, bool $toArray = true, mixed $parentKey = ''): mixed
     {
         // 如果是基本类型，直接返回
         if (!is_array($data) && !is_object($data)) {
