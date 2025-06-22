@@ -205,7 +205,7 @@ class JsonGzipDownsizeTest extends TestCase
 
     /**
      * 测试GZIP压缩效率提升
-     * 
+     *
      * 此测试验证使用JsonGzipDownsize优化后的JSON确实能够提高GZIP压缩效率
      */
     public function testGzipCompressionEfficiency(): void
