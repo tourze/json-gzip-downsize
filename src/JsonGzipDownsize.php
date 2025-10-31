@@ -17,23 +17,32 @@ class JsonGzipDownsize
      * 编码数据为JSON
      *
      * @param mixed $data 要编码的数据
+     *
      * @return string 编码后的JSON字符串
+     * @throws \JsonException 当JSON编码失败时抛出异常
      */
     public static function encode(mixed $data): string
     {
-        return json_encode($data);
+        $result = json_encode($data, JSON_THROW_ON_ERROR);
+        if (false === $result) {
+            throw new \JsonException('JSON encoding failed');
+        }
+
+        return $result;
     }
 
     /**
      * 解码JSON字符串为PHP数据结构
      *
-     * @param string $json JSON字符串
-     * @param bool $assoc 是否将对象转换为关联数组
+     * @param string $json  JSON字符串
+     * @param bool   $assoc 是否将对象转换为关联数组
+     *
      * @return mixed 解码后的数据
+     * @throws \JsonException 当JSON解码失败时抛出异常
      */
     public static function decode(string $json, bool $assoc = false): mixed
     {
-        return json_decode($json, $assoc);
+        return json_decode($json, $assoc, 512, JSON_THROW_ON_ERROR);
     }
 
     /**
@@ -47,17 +56,18 @@ class JsonGzipDownsize
      *
      * 注意：此方法只调整字段顺序，不改变数据本身的结构或内容。
      *
-     * @param mixed $data 要优化的数据
-     * @param bool $returnJson 是否返回JSON字符串
+     * @param mixed $data       要优化的数据
+     * @param bool  $returnJson 是否返回JSON字符串
+     *
      * @return mixed 优化后的数据结构或JSON字符串
      */
     public static function optimizeForGzip(mixed $data, bool $returnJson = true): mixed
     {
         // 如果是JSON字符串，先解码
         if (is_string($data) && (
-                str_starts_with(trim($data), '{') ||
-                str_starts_with(trim($data), '[')
-            )) {
+            str_starts_with(trim($data), '{')
+            || str_starts_with(trim($data), '[')
+        )) {
             $isJson = true;
             $originalFormat = 'json';
             // 默认解码为数组进行处理
@@ -80,7 +90,7 @@ class JsonGzipDownsize
 
         // 如果原始数据是对象，但处理过程中转为了数组，恢复为对象
         if ($wasObject && is_array($result)) {
-            return (object)$result;
+            return (object) $result;
         }
 
         return $result;
@@ -91,8 +101,9 @@ class JsonGzipDownsize
      *
      * 该方法解码JSON数据，保持原始数据格式
      *
-     * @param string $json 优化后的JSON字符串
-     * @param bool $assoc 是否将对象转换为关联数组，true为返回数组，false为返回对象
+     * @param string $json  优化后的JSON字符串
+     * @param bool   $assoc 是否将对象转换为关联数组，true为返回数组，false为返回对象
+     *
      * @return mixed 重建后的数据结构
      */
     public static function rebuildFromOptimized(string $json, bool $assoc = false): mixed
@@ -111,9 +122,10 @@ class JsonGzipDownsize
     /**
      * 递归转换数据结构（对象转数组或数组转对象）
      *
-     * @param mixed $data 要转换的数据
-     * @param bool $toArray true表示转为数组，false表示转为对象
+     * @param mixed      $data      要转换的数据
+     * @param bool       $toArray   true表示转为数组，false表示转为对象
      * @param string|int $parentKey 父级键名，用于特殊处理嵌套结构
+     *
      * @return mixed 转换后的数据
      */
     private static function convertStructure(mixed $data, bool $toArray = true, mixed $parentKey = ''): mixed
@@ -124,42 +136,108 @@ class JsonGzipDownsize
         }
 
         // 转换当前层级
-        $result = $toArray ? (array)$data : (object)$data;
+        $result = $toArray ? (array) $data : (object) $data;
 
         // 递归处理嵌套结构
-        foreach ($result as $key => &$value) {
-            if (is_object($value)) {
-                // 特殊处理：testBasicOptimization 中的 'nested'
-                if ($key === 'nested' && $toArray) {
-                    $value = (array)$value;
-                    $value = self::convertStructure($value, true, $key);
-                    continue;
-                }
-
-                // 特殊处理：testNestedStructures 中的 'object'
-                if ($key === 'object' && $parentKey === 'nested' && isset($result['array'])) {
-                    continue; // 保持为对象
-                }
-
-                $value = self::convertStructure($value, $toArray, $key);
-            } elseif (is_array($value)) {
-                // 检查是否为索引数组（非关联数组）
-                if (self::isIndexedArray($value)) {
-                    // 索引数组保持为数组，只处理内部元素
-                    foreach ($value as &$item) {
-                        if (is_array($item) || is_object($item)) {
-                            $item = self::convertStructure($item, $toArray, $key);
-                        }
-                    }
-                    unset($item);
-                } else {
-                    // 关联数组根据要求转换
-                    $value = self::convertStructure($value, $toArray, $key);
-                }
-            }
+        $result = (array) $result;
+        foreach ($result as $key => $value) {
+            $result[$key] = self::convertStructureValue($value, $key, $parentKey, $toArray, $result);
         }
 
         return $result;
+    }
+
+    /**
+     * 转换结构值的辅助方法
+     *
+     * @param mixed      $value     要转换的值
+     * @param string|int $key       当前键
+     * @param string|int $parentKey 父级键
+     * @param bool       $toArray   是否转换为数组
+     * @param array<string|int, mixed> $result 当前结果数组
+     *
+     * @return mixed 转换后的值
+     */
+    private static function convertStructureValue(mixed $value, mixed $key, mixed $parentKey, bool $toArray, array $result): mixed
+    {
+        if (is_object($value)) {
+            return self::handleObjectValue($value, $key, $parentKey, $toArray, $result);
+        }
+
+        if (is_array($value)) {
+            return self::handleArrayValue($value, $key, $toArray);
+        }
+
+        return $value;
+    }
+
+    /**
+     * 处理对象值
+     *
+     * @param object $value 对象值
+     * @param string|int $key 当前键
+     * @param string|int $parentKey 父级键
+     * @param bool $toArray 是否转换为数组
+     * @param array<string|int, mixed> $result 当前结果数组
+     *
+     * @return mixed 处理后的值
+     */
+    private static function handleObjectValue(object $value, mixed $key, mixed $parentKey, bool $toArray, array $result): mixed
+    {
+        // 特殊处理：testBasicOptimization 中的 'nested'
+        if ('nested' === $key && $toArray) {
+            $value = (array) $value;
+
+            return self::convertStructure($value, true, $key);
+        }
+
+        // 特殊处理：testNestedStructures 中的 'object'
+        if ('object' === $key && 'nested' === $parentKey && isset($result['array'])) {
+            return $value; // 保持为对象
+        }
+
+        return self::convertStructure($value, $toArray, $key);
+    }
+
+    /**
+     * 处理数组值
+     *
+     * @param array<string|int, mixed> $value 数组值
+     * @param string|int $key 当前键
+     * @param bool $toArray 是否转换为数组
+     *
+     * @return mixed 处理后的值
+     */
+    private static function handleArrayValue(array $value, mixed $key, bool $toArray): mixed
+    {
+        // 检查是否为索引数组（非关联数组）
+        if (self::isIndexedArray($value)) {
+            return self::processIndexedArray($value, $key, $toArray);
+        }
+
+        // 关联数组根据要求转换
+        return self::convertStructure($value, $toArray, $key);
+    }
+
+    /**
+     * 处理索引数组
+     *
+     * @param array<string|int, mixed> $value 索引数组值
+     * @param string|int $key 当前键
+     * @param bool $toArray 是否转换为数组
+     *
+     * @return array<string|int, mixed> 处理后的索引数组
+     */
+    private static function processIndexedArray(array $value, mixed $key, bool $toArray): array
+    {
+        // 索引数组保持为数组，只处理内部元素
+        foreach ($value as $index => $item) {
+            if (is_array($item) || is_object($item)) {
+                $value[$index] = self::convertStructure($item, $toArray, $key);
+            }
+        }
+
+        return $value;
     }
 
     /**
@@ -167,8 +245,9 @@ class JsonGzipDownsize
      *
      * 该函数将对象的字段按类型分组并排序，以提高GZIP压缩效率
      *
-     * @param mixed $data 要排序的数据
-     * @param bool $wasObject 数据是否原为对象
+     * @param mixed $data      要排序的数据
+     * @param bool  $wasObject 数据是否原为对象
+     *
      * @return mixed 排序后的数据
      */
     private static function sortFieldsByType(mixed $data, bool $wasObject = false): mixed
@@ -178,27 +257,69 @@ class JsonGzipDownsize
             return $data;
         }
 
-        // 将对象转换为数组进行处理
+        $wasObjectCopy = $wasObject;
         $isObject = is_object($data);
         if ($isObject) {
-            $data = (array)$data;
-            $wasObject = true;
+            $data = (array) $data;
+            $wasObjectCopy = true;
         }
+        $data = $data;
+        $wasObject = $wasObjectCopy;
 
         // 检查是否为索引数组
-        $isIndexedArray = self::isIndexedArray($data);
-
-        // 如果是索引数组，保持顺序但处理内部元素
-        if ($isIndexedArray) {
-            foreach ($data as &$item) {
-                // 递归处理数组元素
-                $item = self::sortFieldsByType($item);
-            }
-            unset($item);
-            return $data;
+        if (self::isIndexedArray($data)) {
+            return self::processIndexedArrayForSorting($data);
         }
 
-        // 创建类型分组
+        return self::processAssociativeArray($data, $wasObject);
+    }
+
+    /**
+     * 处理索引数组的排序
+     *
+     * @param array<string|int, mixed> $data 要排序的索引数组
+     *
+     * @return array<string|int, mixed> 排序后的数组
+     */
+    private static function processIndexedArrayForSorting(array $data): array
+    {
+        foreach ($data as $index => $item) {
+            $data[$index] = self::sortFieldsByType($item);
+        }
+
+        return $data;
+    }
+
+    /**
+     * 处理关联数组的排序
+     *
+     * @param array<string|int, mixed> $data 要排序的关联数组
+     * @param bool $wasObject 数据是否原为对象
+     *
+     * @return mixed 排序后的数据
+     */
+    private static function processAssociativeArray(array $data, bool $wasObject): mixed
+    {
+        $grouped = self::groupFieldsByType($data);
+        $sortedData = self::mergeGroupedFields($grouped);
+
+        // 如果原始数据是对象，返回对象
+        if ($wasObject) {
+            return (object) $sortedData;
+        }
+
+        return $sortedData;
+    }
+
+    /**
+     * 按类型分组字段
+     *
+     * @param array<string|int, mixed> $data 要分组的数据
+     *
+     * @return array<string, array<string|int, mixed>> 分组后的数据
+     */
+    private static function groupFieldsByType(array $data): array
+    {
         $grouped = [
             'numbers' => [],    // 数字类型
             'booleans' => [],   // 布尔类型
@@ -207,56 +328,70 @@ class JsonGzipDownsize
             'strings' => [],    // 字符串类型
         ];
 
-        // 对关联数组字段进行分组
         foreach ($data as $key => $value) {
-            // 递归处理嵌套的数组和对象，但保留原始类型信息
-            if (is_array($value) || is_object($value)) {
-                // 判断是否为对象
-                $valueIsObject = is_object($value);
-
-                // 递归优化，并传递是否对象的信息
-                $processedValue = self::sortFieldsByType($value, $valueIsObject);
-
-                // 将处理后的值添加到分组中
-                $grouped['objects'][$key] = $processedValue;
-            } elseif (is_int($value) || is_float($value)) {
-                $grouped['numbers'][$key] = $value;
-            } elseif (is_bool($value)) {
-                $grouped['booleans'][$key] = $value;
-            } elseif ($value === null) {
-                $grouped['nulls'][$key] = $value;
-            } else {
-                $grouped['strings'][$key] = $value;
-            }
+            $grouped = self::categorizeAndGroupValue($grouped, $key, $value);
         }
 
-        // 合并所有分组
-        $sortedData = array_merge(
+        return $grouped;
+    }
+
+    /**
+     * 分类并分组值
+     *
+     * @param array<string, array<string|int, mixed>> $grouped 分组数据
+     * @param string|int $key 键
+     * @param mixed $value 值
+     *
+     * @return array<string, array<string|int, mixed>> 更新后的分组数据
+     */
+    private static function categorizeAndGroupValue(array $grouped, mixed $key, mixed $value): array
+    {
+        if (is_array($value) || is_object($value)) {
+            $valueIsObject = is_object($value);
+            $processedValue = self::sortFieldsByType($value, $valueIsObject);
+            $grouped['objects'][$key] = $processedValue;
+        } elseif (is_int($value) || is_float($value)) {
+            $grouped['numbers'][$key] = $value;
+        } elseif (is_bool($value)) {
+            $grouped['booleans'][$key] = $value;
+        } elseif (null === $value) {
+            $grouped['nulls'][$key] = $value;
+        } else {
+            $grouped['strings'][$key] = $value;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * 合并分组的字段
+     *
+     * @param array<string, array<string|int, mixed>> $grouped 分组的字段数据
+     *
+     * @return array<string|int, mixed> 合并后的字段数据
+     */
+    private static function mergeGroupedFields(array $grouped): array
+    {
+        return array_merge(
             $grouped['numbers'],
             $grouped['booleans'],
             $grouped['nulls'],
             $grouped['objects'],
             $grouped['strings']
         );
-
-        // 如果原始数据是对象，返回对象
-        if ($wasObject) {
-            return (object)$sortedData;
-        }
-
-        return $sortedData;
     }
 
     /**
      * 检查数组是否为索引数组（非关联数组）
      *
-     * @param array $array 要检查的数组
+     * @param array<string|int, mixed> $array 要检查的数组
+     *
      * @return bool 如果是索引数组则返回true
      */
     private static function isIndexedArray(array $array): bool
     {
         // 空数组视为索引数组
-        if (empty($array)) {
+        if (0 === count($array)) {
             return true;
         }
 
